@@ -1,21 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
+  // swcMinify is enabled by default in Next.js 15
   // Configure image domains if needed
   images: {
     domains: ['localhost'],
     // Add your production domain here once deployed
     // e.g. domains: ['localhost', 'timesheet.yourcompany.com'],
   },
-  // Add analytics if available
-  analyticsId: process.env.NEXT_PUBLIC_ANALYTICS_ID,
-  // Improve production performance
+  // Remove analyticsId as it's not a valid top-level option
+  
+  // Update experimental options to valid ones for Next.js 15
   experimental: {
-    // Enable server components for better performance
-    serverComponents: true,
-    // Optional: HTTP/3 support
-    http3: true,
+    // serverComponents is enabled by default in Next.js 13+
+    // http3 has been removed from experimental options
   },
   // Add headers for security
   async headers() {
