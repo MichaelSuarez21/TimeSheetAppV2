@@ -456,11 +456,11 @@ function ProjectDetailsClient({ projectId }: { projectId: string }) {
   );
 }
 
-// This is the page component that safely handles the params
-export default function ProjectDetailsPage({ params }: { params: { projectId: string } }) {
-  const params2 = useParams();
-  // We need to safely extract the projectId from params2
-  const projectId = params2.projectId as string;
+// Remove the params from the props and use useParams() directly
+export default function ProjectDetailsPage() {
+  const params = useParams();
+  // We need to safely extract the projectId from params
+  const projectId = params.projectId as string;
   
   return <ProjectDetailsClient projectId={projectId} />;
 } 
