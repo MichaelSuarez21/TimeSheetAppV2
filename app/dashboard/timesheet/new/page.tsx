@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 export default function NewTimeEntryPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const projectId = searchParams.get('project');
   
   return (
     <div className="space-y-6">
@@ -22,10 +23,10 @@ export default function NewTimeEntryPage() {
         </Button>
         <h1 className="text-3xl font-bold">New Time Entry</h1>
       </div>
-      <p className="text-gray-500">Log your work hours for a project</p>
+      <p className="text-gray-500">Log your work hours for a project or task</p>
       
       <div className="border rounded-md p-6">
-        <TimeEntryForm />
+        <TimeEntryForm projectId={projectId || undefined} />
       </div>
     </div>
   );

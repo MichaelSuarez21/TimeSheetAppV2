@@ -13,49 +13,85 @@ import { Textarea } from '@/components/ui/textarea';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase/client';
 import { Calendar as CalendarIcon } from 'lucide-react';
 import type { TimeEntry, Project } from '@/types/database';
+import { cn } from '@/lib/utils';
+
+// Add Task type
+interface Task {
+  id: string;
+  task_description: string;
+}
 
 const formSchema = z.object({
-  project_id: z.string({
-    required_error: 'Please select a project',
-  }),
+  // A type field to determine if this is a project or task entry
+  entry_type: z.enum(['project', 'task']),
+  
+  // Make project_id optional since it's only required for project entries
+  project_id: z.string().optional(),
+  
+  // Add task_id which is required for task entries
+  task_id: z.string().optional(),
+  
   hours: z.coerce.number().min(0.1, {
     message: 'Hours must be at least 0.1',
   }).max(24, {
     message: 'Hours cannot exceed 24 per day',
   }),
+  
   date: z.date({
     required_error: 'Please select a date',
   }),
+  
   notes: z.string().optional(),
+}).refine(data => {
+  // Ensure that either project_id or task_id is provided based on entry_type
+  if (data.entry_type === 'project') {
+    return !!data.project_id;
+  } else if (data.entry_type === 'task') {
+    return !!data.task_id;
+  }
+  return false;
+}, {
+  message: "You must select either a project or a task",
+  path: ['entry_type'], 
 });
 
 type TimeEntryFormProps = {
   timeEntry?: TimeEntry;
   isEditing?: boolean;
+  projectId?: string; // Optional prop for pre-selecting a project
 };
 
-export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormProps) {
+export function TimeEntryForm({ timeEntry, isEditing = false, projectId }: TimeEntryFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const projectFromUrl = searchParams.get('project');
   const [isLoading, setIsLoading] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [creators, setCreators] = useState<{[key: string]: {email?: string, full_name?: string}}>({});
-
+  
+  // Determine initial entry type based on time entry or projectId
+  const initialEntryType = timeEntry?.task_id ? 'task' : 'project';
+  
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      project_id: projectFromUrl || timeEntry?.project_id || '',
+      entry_type: initialEntryType,
+      project_id: timeEntry?.project_id || projectId || '',
+      task_id: timeEntry?.task_id || '',
       hours: timeEntry?.hours || 0,
       date: timeEntry?.date ? new Date(timeEntry.date) : new Date(),
       notes: timeEntry?.notes || '',
     },
   });
 
+  const entryType = form.watch('entry_type');
+  
   useEffect(() => {
     async function fetchProjects() {
       try {
@@ -90,6 +126,15 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
             setCreators(creatorsMap);
           }
         }
+        
+        // Fetch all tasks
+        const { data: tasksData, error: tasksError } = await supabase
+          .from('tasks')
+          .select('id, task_description')
+          .order('task_description', { ascending: true });
+          
+        if (tasksError) throw tasksError;
+        setTasks(tasksData || []);
       } catch (error: any) {
         console.error("Error fetching projects:", error);
         toast.error(error.message || 'Failed to load projects');
@@ -108,6 +153,7 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
   };
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    console.log("Form values:", values); // Add this for debugging
     setIsLoading(true);
     try {
       const {
@@ -118,41 +164,54 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
         throw new Error('User not authenticated');
       }
 
+      // Prepare the time entry data
+      const timeEntryData: any = {
+        user_id: user.id,
+        hours: values.hours,
+        date: values.date.toISOString().split('T')[0],
+        notes: values.notes || null,
+      };
+      
+      // Add either project_id or task_id based on entry_type
+      if (values.entry_type === 'project' && values.project_id) {
+        timeEntryData.project_id = values.project_id;
+        timeEntryData.task_id = null; // Clear task_id if present
+      } else if (values.entry_type === 'task' && values.task_id) {
+        timeEntryData.task_id = values.task_id;
+        timeEntryData.project_id = null; // Clear project_id if present
+      } else {
+        // If neither condition was met, then we don't have valid data
+        throw new Error('You must select either a project or a task');
+      }
+
+      console.log("Submitting time entry data:", timeEntryData); // Add this for debugging
+
       if (isEditing && timeEntry) {
         // Update existing time entry
         const { error } = await supabase
           .from('time_entries')
-          .update({
-            project_id: values.project_id,
-            hours: values.hours,
-            date: format(values.date, 'yyyy-MM-dd'),
-            notes: values.notes,
-            updated_at: new Date().toISOString(),
-          })
+          .update(timeEntryData)
           .eq('id', timeEntry.id);
 
         if (error) throw error;
-        toast.success('Time entry updated successfully!');
+        
+        toast.success('Time entry updated');
+        router.push('/dashboard/timesheet');
       } else {
         // Create new time entry
-        const { error } = await supabase.from('time_entries').insert({
-          project_id: values.project_id,
-          user_id: user.id,
-          hours: values.hours,
-          date: format(values.date, 'yyyy-MM-dd'),
-          notes: values.notes,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        });
+        const { data, error } = await supabase
+          .from('time_entries')
+          .insert(timeEntryData)
+          .select()
+          .single();
 
         if (error) throw error;
-        toast.success('Time entry created successfully!');
+        
+        toast.success('Time entry created');
+        router.push('/dashboard/timesheet');
       }
-
-      router.push('/dashboard/timesheet');
-      router.refresh();
     } catch (error: any) {
-      console.error("Error saving time entry:", error);
+      console.error('Error submitting time entry:', error);
       toast.error(error.message || 'Failed to save time entry');
     } finally {
       setIsLoading(false);
@@ -162,55 +221,106 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        {/* Entry Type Selection */}
         <FormField
           control={form.control}
-          name="project_id"
+          name="entry_type"
           render={({ field }) => (
-            <FormItem>
-              <FormLabel>Project</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a project" />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  {projects.length === 0 ? (
-                    <SelectItem value="no-projects" disabled>
-                      No projects available
-                    </SelectItem>
-                  ) : (
-                    projects.map((project) => (
-                      <SelectItem key={project.id} value={project.id}>
-                        <div className="flex flex-col">
-                          <span>{project.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            Created by: {getCreatorDisplay(project.user_id)}
-                          </span>
-                        </div>
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+            <FormItem className="space-y-3">
+              <FormLabel>Entry Type</FormLabel>
+              <FormControl>
+                <RadioGroup
+                  onValueChange={field.onChange}
+                  defaultValue={field.value}
+                  className="flex flex-row space-x-4"
+                >
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="project" id="project" />
+                    <label htmlFor="project" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      Project
+                    </label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <RadioGroupItem value="task" id="task" />
+                    <label htmlFor="task" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      Task
+                    </label>
+                  </div>
+                </RadioGroup>
+              </FormControl>
               <FormMessage />
-              {projects.length === 0 && (
-                <p className="text-sm text-muted-foreground mt-2">
-                  No projects found in the system. Please{' '}
-                  <Button
-                    variant="link"
-                    className="p-0 h-auto"
-                    onClick={() => router.push('/dashboard/projects/new')}
-                  >
-                    create a project
-                  </Button>{' '}
-                  to continue.
-                </p>
-              )}
             </FormItem>
           )}
         />
+        
+        {/* Project Selection - Only show if entry type is 'project' */}
+        {entryType === 'project' && (
+          <FormField
+            control={form.control}
+            name="project_id"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Project</FormLabel>
+                <Select
+                  disabled={isLoading}
+                  onValueChange={field.onChange}
+                  value={field.value}
+                >
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a project" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {projects.map((project) => (
+                      <SelectItem key={project.id} value={project.id}>
+                        {project.name}
+                        <span className="text-xs text-gray-500 ml-2">
+                          (by {getCreatorDisplay(project.user_id)})
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+        
+        {/* Task Selection - Only show if entry type is 'task' */}
+        {entryType === 'task' && (
+          <FormField
+            control={form.control}
+            name="task_id"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Task</FormLabel>
+                <Select
+                  disabled={isLoading}
+                  onValueChange={field.onChange}
+                  value={field.value}
+                >
+                  <FormControl>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a task" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent>
+                    {tasks.map((task) => (
+                      <SelectItem key={task.id} value={task.id}>
+                        {task.task_description}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
 
+        {/* Hours Input */}
         <FormField
           control={form.control}
           name="hours"
@@ -219,12 +329,11 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
               <FormLabel>Hours</FormLabel>
               <FormControl>
                 <Input
+                  {...field}
                   type="number"
                   step="0.1"
-                  min="0.1"
-                  max="24"
-                  placeholder="Enter hours worked"
-                  {...field}
+                  placeholder="0.0"
+                  disabled={isLoading}
                 />
               </FormControl>
               <FormMessage />
@@ -232,6 +341,7 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
           )}
         />
 
+        {/* Date Picker */}
         <FormField
           control={form.control}
           name="date"
@@ -243,10 +353,14 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
                   <FormControl>
                     <Button
                       variant="outline"
-                      className="w-full pl-3 text-left font-normal"
+                      className={cn(
+                        "w-full pl-3 text-left font-normal",
+                        !field.value && "text-muted-foreground"
+                      )}
+                      disabled={isLoading}
                     >
                       {field.value ? (
-                        format(field.value, 'PPP')
+                        format(field.value, "PPP")
                       ) : (
                         <span>Pick a date</span>
                       )}
@@ -259,7 +373,9 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
                     mode="single"
                     selected={field.value}
                     onSelect={field.onChange}
-                    disabled={(date) => date > new Date()}
+                    disabled={(date) =>
+                      date > new Date() || date < new Date("1900-01-01")
+                    }
                     initialFocus
                   />
                 </PopoverContent>
@@ -269,6 +385,7 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
           )}
         />
 
+        {/* Notes Textarea */}
         <FormField
           control={form.control}
           name="notes"
@@ -277,10 +394,10 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
               <FormLabel>Notes (Optional)</FormLabel>
               <FormControl>
                 <Textarea
-                  placeholder="Add any additional notes"
-                  className="min-h-32"
+                  placeholder="Add any additional notes here"
+                  className="min-h-24 resize-none"
                   {...field}
-                  value={field.value || ''}
+                  disabled={isLoading}
                 />
               </FormControl>
               <FormMessage />
@@ -288,24 +405,37 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
           )}
         />
 
-        <div className="flex justify-end gap-4">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => router.push('/dashboard/timesheet')}
-          >
-            Cancel
-          </Button>
-          <Button type="submit" disabled={isLoading}>
-            {isLoading
-              ? isEditing
-                ? 'Updating...'
-                : 'Creating...'
-              : isEditing
-              ? 'Update Time Entry'
-              : 'Create Time Entry'}
-          </Button>
-        </div>
+        <Button type="submit" className="w-full" disabled={isLoading}>
+          {isLoading ? (
+            <div className="flex items-center">
+              <svg
+                className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                ></circle>
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                ></path>
+              </svg>
+              Processing...
+            </div>
+          ) : isEditing ? (
+            "Save Changes"
+          ) : (
+            "Create Time Entry"
+          )}
+        </Button>
       </form>
     </Form>
   );

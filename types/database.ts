@@ -2,6 +2,7 @@ export type User = {
   id: string;
   email: string;
   full_name: string;
+  role: string;
   created_at: string;
 };
 
@@ -14,9 +15,17 @@ export type Project = {
   updated_at: string;
 };
 
+export type Task = {
+  id: string;
+  task_description: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type TimeEntry = {
   id: string;
-  project_id: string;
+  project_id: string | null;
+  task_id: string | null;
   user_id: string;
   hours: number;
   date: string;

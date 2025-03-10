@@ -7,96 +7,94 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PlusCircle, RefreshCcw, Calendar, User } from 'lucide-react';
 import { supabase } from '@/lib/supabase/client';
 import { toast } from 'sonner';
-import type { TimeEntry, Project } from '@/types/database';
+import type { TimeEntry, Project, Task } from '@/types/database';
 
 export default function TimeSheetPage() {
-  const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
-  const [projects, setProjects] = useState<{[key: string]: Project}>({});
+  const [timeEntries, setTimeEntries] = useState<Array<TimeEntry & { project_name?: string, task_description?: string }>>([]);
+  const [projects, setProjects] = useState<{ [key: string]: Project }>({});
+  const [tasks, setTasks] = useState<{ [key: string]: Task }>({});
   const [users, setUsers] = useState<{[key: string]: {email?: string, full_name?: string}}>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function fetchData() {
-    try {
+  useEffect(() => {
+    const fetchData = async () => {
       setLoading(true);
-      setError(null);
-      
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          throw new Error('User not authenticated');
+        }
 
-      // Get all time entries - with open permissions
-      const { data: entriesData, error: entriesError } = await supabase
-        .from('time_entries')
-        .select('*')
-        .order('date', { ascending: false });
-      
-      if (entriesError) throw entriesError;
-      
-      setTimeEntries(entriesData || []);
-      console.log(`Fetched ${entriesData?.length || 0} time entries`);
-      
-      // Get all relevant projects
-      if (entriesData && entriesData.length > 0) {
-        const projectIds = [...new Set(entriesData.map(entry => entry.project_id))];
-        
+        // Fetch all projects
         const { data: projectsData, error: projectsError } = await supabase
           .from('projects')
-          .select('*')
-          .in('id', projectIds);
-          
+          .select('*');
+
         if (projectsError) throw projectsError;
-        
+
+        // Create a map of project ID to project for easy lookup
         const projectsMap = (projectsData || []).reduce((acc, project) => {
           acc[project.id] = project;
           return acc;
-        }, {} as {[key: string]: Project});
+        }, {} as { [key: string]: Project });
         
         setProjects(projectsMap);
-      }
-      
-      // Get all relevant users
-      if (entriesData && entriesData.length > 0) {
-        const userIds = [...new Set(entriesData.map(entry => entry.user_id))];
         
-        const { data: usersData, error: usersError } = await supabase
-          .from('users')
-          .select('id, email, full_name')
-          .in('id', userIds);
+        // Fetch all tasks
+        const { data: tasksData, error: tasksError } = await supabase
+          .from('tasks')
+          .select('*');
           
-        if (!usersError && usersData) {
-          const usersMap = usersData.reduce((acc, user) => {
-            acc[user.id] = { email: user.email, full_name: user.full_name };
-            return acc;
-          }, {} as {[key: string]: {email?: string, full_name?: string}});
-          
-          setUsers(usersMap);
-        }
+        if (tasksError) throw tasksError;
+        
+        // Create a map of task ID to task for easy lookup
+        const tasksMap = (tasksData || []).reduce((acc, task) => {
+          acc[task.id] = task;
+          return acc;
+        }, {} as { [key: string]: Task });
+        
+        setTasks(tasksMap);
+
+        // Fetch user's time entries
+        const { data: entriesData, error: entriesError } = await supabase
+          .from('time_entries')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('date', { ascending: false });
+
+        if (entriesError) throw entriesError;
+
+        // Map project names to time entries
+        const entriesWithDetails = (entriesData || []).map(entry => ({
+          ...entry,
+          project_name: entry.project_id ? projectsMap[entry.project_id]?.name : undefined,
+          task_description: entry.task_id ? tasksMap[entry.task_id]?.task_description : undefined
+        }));
+
+        setTimeEntries(entriesWithDetails);
+      } catch (error) {
+        console.error('Error fetching timesheet data:', error);
+        toast.error('Failed to load timesheet data');
+      } finally {
+        setLoading(false);
       }
-    } catch (err: any) {
-      console.error('Error fetching time entries:', err);
-      setError(err.message);
-      toast.error('Failed to load timesheet');
-    } finally {
-      setLoading(false);
-    }
-  }
+    };
+
+    fetchData();
+  }, []);
 
   // Get display name for a user
-  const getUserDisplay = (userId: string) => {
+  const getUserName = (userId: string) => {
     const user = users[userId];
-    if (user?.full_name) return user.full_name;
-    if (user?.email) return user.email.split('@')[0];
-    return userId.substring(0, 8) + '...';
+    if (!user) return 'Unknown User';
+    return user.full_name || user.email || 'Unknown User';
   };
 
   // Get project name
   const getProjectName = (projectId: string) => {
     return projects[projectId]?.name || 'Unknown Project';
   };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
 
   if (loading) {
     return (
@@ -128,7 +126,16 @@ export default function TimeSheetPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Timesheet</h1>
         <div className="flex space-x-2">
-          <Button variant="outline" onClick={fetchData}>
+          <Button 
+            variant="outline" 
+            onClick={() => {
+              setLoading(true);
+              // Re-run the useEffect by triggering a state change
+              setTimeEntries([]);
+              setProjects({});
+              setTasks({});
+            }}
+          >
             <RefreshCcw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
@@ -170,6 +177,7 @@ export default function TimeSheetPage() {
               <tr className="border-b bg-gray-50">
                 <th className="px-4 py-3 text-left font-medium">Date</th>
                 <th className="px-4 py-3 text-left font-medium">Project</th>
+                <th className="px-4 py-3 text-left font-medium">Task</th>
                 <th className="px-4 py-3 text-left font-medium">Hours</th>
                 <th className="px-4 py-3 text-left font-medium">User</th>
                 <th className="px-4 py-3 text-left font-medium">Notes</th>
@@ -179,28 +187,41 @@ export default function TimeSheetPage() {
             <tbody>
               {timeEntries.map((entry) => (
                 <tr key={entry.id} className="border-b">
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 whitespace-nowrap">
                     {new Date(entry.date).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-3">
-                    <Link 
-                      href={`/dashboard/projects/${entry.project_id}`}
-                      className="text-blue-600 hover:underline"
-                    >
-                      {getProjectName(entry.project_id)}
-                    </Link>
+                    {entry.project_id ? (
+                      <Link
+                        href={`/dashboard/projects/${entry.project_id}`}
+                        className="font-medium text-blue-600 hover:underline"
+                      >
+                        {entry.project_name || 'Unknown project'}
+                      </Link>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    {entry.task_id ? (
+                      <span className="font-medium text-green-600">
+                        {entry.task_description || 'Unknown task'}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">{entry.hours}</td>
-                  <td className="px-4 py-3 text-gray-500">
+                  <td className="px-4 py-3">
                     <div className="flex items-center">
                       <User className="h-3 w-3 mr-1 text-gray-400" />
-                      {getUserDisplay(entry.user_id)}
+                      {getUserName(entry.user_id)}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-gray-500 max-w-[200px] truncate">
-                    {entry.notes || 'No notes'}
+                  <td className="px-4 py-3 max-w-xs truncate">
+                    {entry.notes || <span className="text-gray-400">No notes</span>}
                   </td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
                     <Button variant="outline" size="sm" asChild>
                       <Link href={`/dashboard/timesheet/${entry.id}/edit`}>
                         Edit

@@ -5,15 +5,34 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Users, Database, BarChart } from 'lucide-react';
+import { Users, Database, BarChart, Trash2, Plus, PenSquare, CheckCircle2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase/client';
 import { toast } from 'sonner';
+import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import TasksManager from './components/TasksManager';
+
+interface User {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+}
 
 export default function AdminDashboardPage() {
   const [totalUsers, setTotalUsers] = useState<number>(0);
-  const [totalProjects, setTotalProjects] = useState<number>(0);
+  const [totalTasks, setTotalTasks] = useState<number>(0);
   const [totalTimeEntries, setTotalTimeEntries] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
+  const [users, setUsers] = useState<User[]>([]);
+  
+  // State for user dialog
+  const [isNewUserDialogOpen, setIsNewUserDialogOpen] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserName, setNewUserName] = useState('');
 
   useEffect(() => {
     const fetchAdminData = async () => {
@@ -22,6 +41,12 @@ export default function AdminDashboardPage() {
         
         // First, double-check admin status on the client side
         const adminCheckResponse = await fetch('/api/check-admin');
+        
+        if (!adminCheckResponse.ok) {
+          console.error('Admin check API error:', adminCheckResponse.status);
+          return;
+        }
+        
         const adminCheckData = await adminCheckResponse.json();
         
         if (!adminCheckData.isAdmin) {
@@ -29,30 +54,28 @@ export default function AdminDashboardPage() {
           return;
         }
 
-        // Fetch system stats using our regular supabase client
-        // These queries should succeed if the user is properly authenticated
-        // and has appropriate permissions
-        
-        // Count users
-        const { count: usersCount, error: usersError } = await supabase
+        // Fetch users
+        const { data: usersData, error: usersError } = await supabase
           .from('users')
-          .select('*', { count: 'exact', head: true });
+          .select('id, email, full_name, role')
+          .order('created_at', { ascending: false });
         
         if (usersError) {
-          console.error('Error counting users:', usersError);
+          console.error('Error fetching users:', usersError);
         } else {
-          setTotalUsers(usersCount || 0);
+          setUsers(usersData || []);
+          setTotalUsers(usersData?.length || 0);
         }
         
-        // Count projects
-        const { count: projectsCount, error: projectsError } = await supabase
-          .from('projects')
+        // Count tasks
+        const { count: tasksCount, error: tasksError } = await supabase
+          .from('tasks')
           .select('*', { count: 'exact', head: true });
         
-        if (projectsError) {
-          console.error('Error counting projects:', projectsError);
+        if (tasksError) {
+          console.error('Error counting tasks:', tasksError);
         } else {
-          setTotalProjects(projectsCount || 0);
+          setTotalTasks(tasksCount || 0);
         }
         
         // Count time entries
@@ -76,6 +99,65 @@ export default function AdminDashboardPage() {
     fetchAdminData();
   }, []);
 
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      // Delete the user from the database
+      const { error } = await supabase
+        .from('users')
+        .delete()
+        .eq('id', userId);
+      
+      if (error) {
+        console.error('Error deleting user:', error);
+        toast.error('Failed to delete user');
+        return;
+      }
+      
+      // Remove from local state
+      setUsers(users.filter(user => user.id !== userId));
+      toast.success('User deleted successfully');
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      toast.error('Failed to delete user');
+    }
+  };
+
+  const handleAddUser = async () => {
+    try {
+      if (!newUserEmail || !newUserName) {
+        toast.error('Please fill in all fields');
+        return;
+      }
+      
+      // Add the user to the database
+      const { data, error } = await supabase
+        .from('users')
+        .insert({
+          email: newUserEmail,
+          full_name: newUserName,
+          role: 'user',
+          created_at: new Date().toISOString()
+        })
+        .select();
+      
+      if (error) {
+        console.error('Error adding user:', error);
+        toast.error('Failed to add user');
+        return;
+      }
+      
+      // Add to local state
+      setUsers([data[0], ...users]);
+      toast.success('User added successfully');
+      setNewUserEmail('');
+      setNewUserName('');
+      setIsNewUserDialogOpen(false);
+    } catch (error) {
+      console.error('Error adding user:', error);
+      toast.error('Failed to add user');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -89,11 +171,11 @@ export default function AdminDashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Admin Dashboard</h1>
-          <p className="text-gray-500 mt-1">Manage users, projects, and system data</p>
+          <p className="text-gray-500 mt-1">Manage users, tasks, and system data</p>
         </div>
       </div>
       
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center">
@@ -106,34 +188,20 @@ export default function AdminDashboardPage() {
             <p className="text-3xl font-bold">{totalUsers}</p>
             <p className="text-sm text-gray-500">Total registered users</p>
           </CardContent>
-          <CardFooter>
-            <Button asChild>
-              <Link href="/dashboard/admin/users">
-                Manage Users
-              </Link>
-            </Button>
-          </CardFooter>
         </Card>
         
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center">
-              <Database className="mr-2 h-5 w-5 text-green-500" />
-              Projects
+              <CheckCircle2 className="mr-2 h-5 w-5 text-green-500" />
+              Tasks
             </CardTitle>
-            <CardDescription>All organization projects</CardDescription>
+            <CardDescription>Task management</CardDescription>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold">{totalProjects}</p>
-            <p className="text-sm text-gray-500">Total active projects</p>
+            <p className="text-3xl font-bold">{totalTasks}</p>
+            <p className="text-sm text-gray-500">Available tasks</p>
           </CardContent>
-          <CardFooter>
-            <Button asChild>
-              <Link href="/dashboard/projects">
-                View Projects
-              </Link>
-            </Button>
-          </CardFooter>
         </Card>
         
         <Card>
@@ -148,15 +216,102 @@ export default function AdminDashboardPage() {
             <p className="text-3xl font-bold">{totalTimeEntries}</p>
             <p className="text-sm text-gray-500">Total time entries</p>
           </CardContent>
-          <CardFooter>
-            <Button asChild>
-              <Link href="/dashboard/reports">
-                View Reports
-              </Link>
-            </Button>
-          </CardFooter>
         </Card>
       </div>
+      
+      {/* Users table section */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-semibold">Users</h2>
+          <Dialog open={isNewUserDialogOpen} onOpenChange={setIsNewUserDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Add User
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Add New User</DialogTitle>
+                <DialogDescription>
+                  Create a new user account. The user will be able to log in once their account is created in Supabase Auth.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input 
+                    id="email" 
+                    placeholder="user@example.com" 
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="name">Full Name</Label>
+                  <Input 
+                    id="name" 
+                    placeholder="John Doe" 
+                    value={newUserName}
+                    onChange={(e) => setNewUserName(e.target.value)}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button type="submit" onClick={handleAddUser}>Add User</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+        
+        <div className="border rounded-md">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-gray-50">
+                  <th className="px-4 py-3 text-left font-medium">Full Name</th>
+                  <th className="px-4 py-3 text-left font-medium">Email</th>
+                  <th className="px-4 py-3 text-left font-medium">Role</th>
+                  <th className="px-4 py-3 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((user) => (
+                  <tr key={user.id} className="border-b">
+                    <td className="px-4 py-3">{user.full_name}</td>
+                    <td className="px-4 py-3 text-gray-500">{user.email}</td>
+                    <td className="px-4 py-3">
+                      <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
+                        {user.role}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <Button 
+                        variant="ghost" 
+                        size="icon"
+                        onClick={() => handleDeleteUser(user.id)}
+                        disabled={user.role === 'admin'} // Prevent deleting admin users
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+                {users.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-3 text-center text-gray-500">
+                      No users found
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      
+      {/* Tasks section - replaced with TasksManager component */}
+      <TasksManager />
     </div>
   );
 } 

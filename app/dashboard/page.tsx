@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { PlusCircle, Clock, Calendar, ExternalLink, User } from 'lucide-react';
 import { supabase } from '@/lib/supabase/client';
-import type { Project, TimeEntry } from '@/types/database';
+import type { Project, TimeEntry, Task } from '@/types/database';
 import { format } from 'date-fns';
 
 export default function DashboardPage() {
@@ -14,6 +14,7 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([]);
+  const [tasks, setTasks] = useState<{ [key: string]: Task }>({});
   const [todayHours, setTodayHours] = useState(0);
   const [weekHours, setWeekHours] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -144,6 +145,28 @@ export default function DashboardPage() {
       const weekTotal = weekEntries.reduce((sum, entry) => sum + (entry.hours || 0), 0);
       setWeekHours(weekTotal);
       
+      // Fetch tasks data for task-based time entries
+      const taskIds = data?.filter(entry => entry.task_id).map(entry => entry.task_id) || [];
+      
+      if (taskIds.length > 0) {
+        const { data: tasksData, error: tasksError } = await supabase
+          .from('tasks')
+          .select('*')
+          .in('id', taskIds);
+          
+        if (tasksError) {
+          console.error('Error fetching tasks:', tasksError);
+        } else if (tasksData) {
+          // Convert to a map for easy lookup
+          const tasksMap = tasksData.reduce((acc, task) => {
+            acc[task.id] = task;
+            return acc;
+          }, {} as { [key: string]: Task });
+          
+          setTasks(tasksMap);
+        }
+      }
+      
       console.log(`Fetched ${data?.length || 0} time entries`);
     } catch (error) {
       console.error('Error fetching time entries:', error);
@@ -272,6 +295,7 @@ export default function DashboardPage() {
                 <tr className="border-b bg-gray-50">
                   <th className="px-4 py-3 text-left font-medium">Date</th>
                   <th className="px-4 py-3 text-left font-medium">Project</th>
+                  <th className="px-4 py-3 text-left font-medium">Task</th>
                   <th className="px-4 py-3 text-left font-medium">Hours</th>
                   <th className="px-4 py-3 text-left font-medium">Notes</th>
                   <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -282,7 +306,22 @@ export default function DashboardPage() {
                   <tr key={entry.id} className="border-b">
                     <td className="px-4 py-3">{new Date(entry.date).toLocaleDateString()}</td>
                     <td className="px-4 py-3">
-                      {allProjects.find(p => p.id === entry.project_id)?.name || 'Unknown Project'}
+                      {entry.project_id ? (
+                        <Link href={`/dashboard/projects/${entry.project_id}`} className="text-blue-600 hover:underline">
+                          {allProjects.find(p => p.id === entry.project_id)?.name || 'Unknown Project'}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {entry.task_id ? (
+                        <span className="text-green-600 font-medium">
+                          {tasks[entry.task_id]?.task_description || 'Unknown Task'}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3">{entry.hours}</td>
                     <td className="px-4 py-3 max-w-[200px] truncate">{entry.notes || 'No notes'}</td>
