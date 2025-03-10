@@ -7,10 +7,12 @@ export async function middleware(req: NextRequest) {
   
   // Only run the middleware on specific paths that require auth
   const PROTECTED_PATHS = ['/dashboard', '/api/timesheet'];
+  const ADMIN_PATHS = ['/dashboard/admin'];
   const AUTH_PATHS = ['/signin', '/signup'];
   
   const path = req.nextUrl.pathname;
   const isProtectedPath = PROTECTED_PATHS.some(prefix => path.startsWith(prefix));
+  const isAdminPath = ADMIN_PATHS.some(prefix => path.startsWith(prefix));
   const isAuthPath = AUTH_PATHS.some(prefix => path === prefix);
   
   // Skip middleware for paths that don't need auth checks
@@ -84,6 +86,38 @@ export async function middleware(req: NextRequest) {
     if (isAuthPath && user) {
       console.log(`Redirecting authenticated user to dashboard: ${user.email}`);
       return NextResponse.redirect(new URL('/dashboard', req.url));
+    }
+    
+    // Check admin access for admin paths
+    if (isAdminPath && user) {
+      console.log('Middleware checking admin access');
+      
+      try {
+        // Create admin check API URL with the same host as the current request
+        const apiUrl = new URL('/api/check-admin', req.url);
+        
+        // Call our admin check API with the same request headers (for cookies)
+        const adminCheckResponse = await fetch(apiUrl, {
+          headers: req.headers
+        });
+        
+        if (!adminCheckResponse.ok) {
+          console.error('Admin check API returned error status:', adminCheckResponse.status);
+          return NextResponse.redirect(new URL('/dashboard', req.url));
+        }
+        
+        const adminCheckData = await adminCheckResponse.json();
+        
+        if (!adminCheckData.isAdmin) {
+          console.log(`User ${user.email} is not an admin:`, adminCheckData.message);
+          return NextResponse.redirect(new URL('/dashboard', req.url));
+        }
+        
+        console.log(`Admin access granted for ${user.email}`);
+      } catch (error) {
+        console.error('Error checking admin access:', error);
+        return NextResponse.redirect(new URL('/dashboard', req.url));
+      }
     }
     
   } catch (error) {

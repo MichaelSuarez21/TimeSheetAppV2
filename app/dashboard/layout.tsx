@@ -11,7 +11,8 @@ import {
   User, 
   LogOut, 
   Settings,
-  ChevronDown
+  ChevronDown,
+  Shield
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase/client';
 import {
@@ -37,6 +38,7 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<UserData | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   
   useEffect(() => {
     const getUser = async () => {
@@ -47,6 +49,27 @@ export default function DashboardLayout({
           email: data.user.email || '',
           fullName: data.user.user_metadata?.full_name || '',
         });
+        
+        // Check admin status using our API endpoint
+        try {
+          const adminCheckResponse = await fetch('/api/check-admin');
+          
+          if (!adminCheckResponse.ok) {
+            console.error('Admin check API error:', adminCheckResponse.status);
+            return;
+          }
+          
+          const adminCheckData = await adminCheckResponse.json();
+          
+          if (adminCheckData.isAdmin) {
+            setIsAdmin(true);
+            console.log('User is an admin');
+          } else {
+            console.log('User is not an admin:', adminCheckData.message);
+          }
+        } catch (error) {
+          console.error('Error checking admin status:', error);
+        }
       }
     };
     
@@ -152,6 +175,17 @@ export default function DashboardLayout({
               <BarChart className="mr-2 h-5 w-5" />
               <span>Reports</span>
             </Link>
+            {isAdmin && (
+              <Link 
+                href="/dashboard/admin" 
+                className={`flex items-center p-2 rounded-md hover:bg-gray-100 ${
+                  pathname.startsWith('/dashboard/admin') ? 'bg-gray-100 font-medium' : ''
+                }`}
+              >
+                <Shield className="mr-2 h-5 w-5" />
+                <span>Admin</span>
+              </Link>
+            )}
           </nav>
         </aside>
 
