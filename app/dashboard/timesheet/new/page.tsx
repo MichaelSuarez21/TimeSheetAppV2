@@ -3,10 +3,11 @@
 import { TimeEntryForm } from '@/components/timesheet/TimeEntryForm';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 export default function NewTimeEntryPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   
   return (
     <div className="space-y-6">

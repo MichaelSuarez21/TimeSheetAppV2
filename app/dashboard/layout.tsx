@@ -123,7 +123,7 @@ export default function DashboardLayout({
       </header>
 
       <div className="flex flex-1">
-        <aside className="w-64 border-r bg-gray-50 p-4 hidden md:block">
+        <aside className="w-64 border-r bg-gray-50 p-4 sticky top-[61px] h-[calc(100vh-61px)] overflow-y-auto hidden md:block">
           <nav className="space-y-2">
             <Link 
               href="/dashboard" 

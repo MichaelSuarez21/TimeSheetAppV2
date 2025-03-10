@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -40,6 +40,8 @@ type TimeEntryFormProps = {
 
 export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const projectFromUrl = searchParams.get('project');
   const [isLoading, setIsLoading] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [creators, setCreators] = useState<{[key: string]: {email?: string, full_name?: string}}>({});
@@ -47,7 +49,7 @@ export function TimeEntryForm({ timeEntry, isEditing = false }: TimeEntryFormPro
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      project_id: timeEntry?.project_id || '',
+      project_id: projectFromUrl || timeEntry?.project_id || '',
       hours: timeEntry?.hours || 0,
       date: timeEntry?.date ? new Date(timeEntry.date) : new Date(),
       notes: timeEntry?.notes || '',
