@@ -1,14 +1,23 @@
 'use client';
 
+import { Suspense } from 'react';
 import { TimeEntryForm } from '@/components/timesheet/TimeEntryForm';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
+
+// Create a client component that uses useSearchParams
+import { useSearchParams } from 'next/navigation';
+
+function TimeEntryFormWithParams() {
+  const searchParams = useSearchParams();
+  const projectId = searchParams.get('project');
+  
+  return <TimeEntryForm projectId={projectId || undefined} />;
+}
 
 export default function NewTimeEntryPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const projectId = searchParams.get('project');
   
   return (
     <div className="space-y-6">
@@ -26,7 +35,9 @@ export default function NewTimeEntryPage() {
       <p className="text-gray-500">Log your work hours for a project or task</p>
       
       <div className="border rounded-md p-6">
-        <TimeEntryForm projectId={projectId || undefined} />
+        <Suspense fallback={<div>Loading form...</div>}>
+          <TimeEntryFormWithParams />
+        </Suspense>
       </div>
     </div>
   );
