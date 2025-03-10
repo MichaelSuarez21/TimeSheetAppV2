@@ -18,7 +18,27 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Clock, User, ExternalLink, FileText, Download } from 'lucide-react';
+import { 
+  Clock, 
+  User, 
+  ExternalLink, 
+  FileText, 
+  Download, 
+  ChevronLeft, 
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight
+} from 'lucide-react';
+import { 
+  Pagination, 
+  PaginationContent, 
+  PaginationEllipsis, 
+  PaginationItem, 
+  PaginationLink, 
+  PaginationNext, 
+  PaginationPrevious 
+} from '@/components/ui/pagination';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { format } from 'date-fns';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
@@ -39,15 +59,49 @@ interface TimeEntriesTableProps {
 
 export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) {
   const [timeEntries, setTimeEntries] = useState<EnhancedTimeEntry[]>([]);
+  const [allFilteredEntries, setAllFilteredEntries] = useState<EnhancedTimeEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [totalHours, setTotalHours] = useState(0);
   const [projects, setProjects] = useState<{ [key: string]: Project }>({});
   const [tasks, setTasks] = useState<{ [key: string]: Task }>({});
   const [users, setUsers] = useState<{ [key: string]: UserType }>({});
+  
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalEntries, setTotalEntries] = useState(0);
+
+  // Calculate total pages
+  const totalPages = Math.ceil(totalEntries / pageSize);
+
+  // Function to enhance time entries with related data
+  const enhanceTimeEntries = (
+    entries: TimeEntry[],
+    projectsMap: { [key: string]: Project },
+    tasksMap: { [key: string]: Task },
+    usersMap: { [key: string]: UserType }
+  ): EnhancedTimeEntry[] => {
+    return entries.map(entry => {
+      const projectName = entry.project_id ? projectsMap[entry.project_id]?.name : undefined;
+      const taskDescription = entry.task_id ? tasksMap[entry.task_id]?.task_description : undefined;
+      const user = usersMap[entry.user_id];
+      const userName = user ? (user.full_name || user.email) : 'Unknown User';
+      
+      return {
+        ...entry,
+        project_name: projectName,
+        task_description: taskDescription,
+        user_name: userName
+      };
+    });
+  };
 
   // Fetch time entries based on filters
   useEffect(() => {
+    // Reset pagination when filters change
+    setPage(1);
+    
     const fetchTimeEntries = async () => {
       setIsLoading(true);
       setError(null);
@@ -56,7 +110,7 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
         // Start building the query
         let query = supabase
           .from('time_entries')
-          .select('*')
+          .select('*', { count: 'exact' })
           .order('date', { ascending: false });
         
         // Apply date range filter
@@ -88,19 +142,41 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
           query = query.in('task_id', filters.taskIds);
         }
         
-        // Execute the query
-        const { data, error: entriesError } = await query;
+        // Execute the query to get the count first
+        const { count } = await query;
+        setTotalEntries(count || 0);
         
-        if (entriesError) throw entriesError;
+        // Get unique user IDs from results by fetching all user IDs that match the filter
+        // This might be a separate query for efficiency
+        const userIdsQuery = supabase
+          .from('time_entries')
+          .select('user_id');
         
-        // Calculate total hours
-        const total = (data || []).reduce((sum, entry) => sum + entry.hours, 0);
-        setTotalHours(total);
+        // Apply the same filters as the main query
+        if (filters.startDate && filters.endDate) {
+          const startDateStr = filters.startDate.toISOString().split('T')[0];
+          const endDateStr = filters.endDate.toISOString().split('T')[0];
+          userIdsQuery.gte('date', startDateStr).lte('date', endDateStr);
+        }
+        if (filters.users.length > 0) {
+          userIdsQuery.in('user_id', filters.users);
+        }
+        if (filters.entryType === 'project') {
+          userIdsQuery.not('project_id', 'is', null);
+        } else if (filters.entryType === 'task') {
+          userIdsQuery.not('task_id', 'is', null);
+        }
+        if (filters.projectIds.length > 0) {
+          userIdsQuery.in('project_id', filters.projectIds);
+        }
+        if (filters.taskIds.length > 0) {
+          userIdsQuery.in('task_id', filters.taskIds);
+        }
         
-        // Get unique user IDs from results
-        const userIds = [...new Set((data || []).map(entry => entry.user_id))];
+        const { data: userIdsData } = await userIdsQuery;
+        const userIds = [...new Set((userIdsData || []).map(entry => entry.user_id))];
         
-        // Fetch users first to ensure we have user data before enhancing entries
+        // Fetch all users
         let usersMap: { [key: string]: UserType } = {};
         if (userIds.length > 0) {
           const { data: usersData, error: usersError } = await supabase
@@ -118,15 +194,37 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
           setUsers(usersMap);
         }
         
-        // Get unique project IDs and task IDs from results
-        const projectIds = [...new Set((data || [])
-          .filter(entry => entry.project_id)
-          .map(entry => entry.project_id))];
-          
-        const taskIds = [...new Set((data || [])
-          .filter(entry => entry.task_id)
-          .map(entry => entry.task_id))];
+        // Similar approach for projects and tasks
+        // (Fetch all project and task IDs that match the filter and then load them)
+        const projectIdsQuery = supabase
+          .from('time_entries')
+          .select('project_id')
+          .not('project_id', 'is', null);
         
+        // Apply the same filters
+        if (filters.startDate && filters.endDate) {
+          const startDateStr = filters.startDate.toISOString().split('T')[0];
+          const endDateStr = filters.endDate.toISOString().split('T')[0];
+          projectIdsQuery.gte('date', startDateStr).lte('date', endDateStr);
+        }
+        if (filters.users.length > 0) {
+          projectIdsQuery.in('user_id', filters.users);
+        }
+        if (filters.entryType === 'project') {
+          // Already filtered for non-null project_id
+        } else if (filters.entryType === 'task') {
+          // If task only, skip this query
+          projectIdsQuery.eq('project_id', 'none'); // This ensures no results
+        }
+        if (filters.projectIds.length > 0) {
+          projectIdsQuery.in('project_id', filters.projectIds);
+        }
+        
+        const { data: projectIdsData } = await projectIdsQuery;
+        const projectIds = [...new Set((projectIdsData || [])
+          .map(entry => entry.project_id)
+          .filter(id => id !== null) as string[])];
+          
         // Fetch projects
         let projectsMap: { [key: string]: Project } = {};
         if (projectIds.length > 0) {
@@ -145,6 +243,36 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
           setProjects(projectsMap);
         }
         
+        // And for tasks
+        const taskIdsQuery = supabase
+          .from('time_entries')
+          .select('task_id')
+          .not('task_id', 'is', null);
+          
+        // Apply the same filters
+        if (filters.startDate && filters.endDate) {
+          const startDateStr = filters.startDate.toISOString().split('T')[0];
+          const endDateStr = filters.endDate.toISOString().split('T')[0];
+          taskIdsQuery.gte('date', startDateStr).lte('date', endDateStr);
+        }
+        if (filters.users.length > 0) {
+          taskIdsQuery.in('user_id', filters.users);
+        }
+        if (filters.entryType === 'project') {
+          // If project only, skip this query
+          taskIdsQuery.eq('task_id', 'none'); // This ensures no results
+        } else if (filters.entryType === 'task') {
+          // Already filtered for non-null task_id
+        }
+        if (filters.taskIds.length > 0) {
+          taskIdsQuery.in('task_id', filters.taskIds);
+        }
+        
+        const { data: taskIdsData } = await taskIdsQuery;
+        const taskIds = [...new Set((taskIdsData || [])
+          .map(entry => entry.task_id)
+          .filter(id => id !== null) as string[])];
+          
         // Fetch tasks
         let tasksMap: { [key: string]: Task } = {};
         if (taskIds.length > 0) {
@@ -163,34 +291,64 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
           setTasks(tasksMap);
         }
         
-        // Enhance time entries with project, task, and user names
-        const enhancedEntries = (data || []).map(entry => {
-          const projectName = entry.project_id ? projectsMap[entry.project_id]?.name : undefined;
-          const taskDescription = entry.task_id ? tasksMap[entry.task_id]?.task_description : undefined;
-          const user = usersMap[entry.user_id];
-          const userName = user ? (user.full_name || user.email) : 'Unknown User';
-          
-          return {
-            ...entry,
-            project_name: projectName,
-            task_description: taskDescription,
-            user_name: userName
-          };
-        });
+        // Now fetch all entries for reports/exports (without pagination)
+        const { data: allData } = await query;
         
-        // Apply search filter if provided
-        let filteredEntries = enhancedEntries;
-        if (filters.searchTerm) {
-          const searchLower = filters.searchTerm.toLowerCase();
-          filteredEntries = enhancedEntries.filter(entry => 
-            (entry.project_name?.toLowerCase().includes(searchLower) || false) ||
-            (entry.task_description?.toLowerCase().includes(searchLower) || false) ||
-            (entry.user_name?.toLowerCase().includes(searchLower) || false) ||
-            (entry.notes?.toLowerCase().includes(searchLower) || false)
-          );
+        if (allData) {
+          // Calculate total hours for all filtered entries
+          const total = allData.reduce((sum, entry) => sum + entry.hours, 0);
+          setTotalHours(total);
+          
+          // Enhance all entries with related data
+          const enhancedAllEntries = enhanceTimeEntries(allData, projectsMap, tasksMap, usersMap);
+          
+          // Apply search filter if provided
+          let filteredAllEntries = enhancedAllEntries;
+          if (filters.searchTerm) {
+            const searchLower = filters.searchTerm.toLowerCase();
+            filteredAllEntries = enhancedAllEntries.filter(entry => 
+              (entry.project_name?.toLowerCase().includes(searchLower) || false) ||
+              (entry.task_description?.toLowerCase().includes(searchLower) || false) ||
+              (entry.user_name?.toLowerCase().includes(searchLower) || false) ||
+              (entry.notes?.toLowerCase().includes(searchLower) || false)
+            );
+          }
+          
+          // Store all filtered entries for report generation
+          setAllFilteredEntries(filteredAllEntries);
+          setTotalEntries(filteredAllEntries.length);
         }
         
-        setTimeEntries(filteredEntries);
+        // Now fetch the paginated entries for display
+        // We'll use a range query to implement pagination
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
+        
+        // Use the same query but add range
+        const { data: paginatedData, error: entriesError } = await query
+          .range(from, to);
+        
+        if (entriesError) throw entriesError;
+        
+        if (paginatedData) {
+          // Enhance paginated entries with related data
+          const enhancedPaginatedEntries = enhanceTimeEntries(paginatedData, projectsMap, tasksMap, usersMap);
+          
+          // Apply search filter if provided
+          let filteredPaginatedEntries = enhancedPaginatedEntries;
+          if (filters.searchTerm) {
+            const searchLower = filters.searchTerm.toLowerCase();
+            filteredPaginatedEntries = enhancedPaginatedEntries.filter(entry => 
+              (entry.project_name?.toLowerCase().includes(searchLower) || false) ||
+              (entry.task_description?.toLowerCase().includes(searchLower) || false) ||
+              (entry.user_name?.toLowerCase().includes(searchLower) || false) ||
+              (entry.notes?.toLowerCase().includes(searchLower) || false)
+            );
+          }
+          
+          // Store paginated entries for display
+          setTimeEntries(filteredPaginatedEntries);
+        }
       } catch (err: any) {
         console.error('Error fetching time entries:', err);
         setError(err.message || 'Failed to load time entries');
@@ -200,10 +358,61 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
     };
     
     fetchTimeEntries();
-  }, [filters]);
+  }, [filters, page, pageSize]);
+  
+  // Handle page change
+  const handlePageChange = (newPage: number) => {
+    setPage(newPage);
+  };
+  
+  // Handle page size change
+  const handlePageSizeChange = (value: string) => {
+    setPageSize(parseInt(value));
+    setPage(1); // Reset to first page when changing page size
+  };
+
+  // Generate CSV export data from all filtered entries
+  const handleCsvExport = () => {
+    // Prepare data for CSV
+    const csvData = allFilteredEntries.map(entry => ({
+      Date: format(new Date(entry.date), 'yyyy-MM-dd'),
+      User: entry.user_name,
+      Type: entry.project_id ? 'Project' : 'Task',
+      'Project/Task': entry.project_name || entry.task_description || 'Unknown',
+      Hours: entry.hours,
+      Notes: entry.notes || ''
+    }));
+    
+    // Convert to CSV
+    const headers = Object.keys(csvData[0] || {}).join(',');
+    const rows = csvData.map(row => 
+      Object.values(row).map(value => 
+        typeof value === 'string' ? `"${value.replace(/"/g, '""')}"` : value
+      ).join(',')
+    );
+    const csv = [headers, ...rows].join('\n');
+    
+    // Create and download file
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `time-entries-report-${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+  
+  // Handle report generation
+  const handleGenerateReport = () => {
+    // This would typically create a more formatted report
+    // For now, we'll just download a CSV
+    handleCsvExport();
+  };
 
   // Render loading state
-  if (isLoading) {
+  if (isLoading && page === 1) { // Only show loading on first page load
     return (
       <Card className={className}>
         <CardHeader className="py-3 px-4">
@@ -239,7 +448,7 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
   }
 
   // Render empty state
-  if (timeEntries.length === 0) {
+  if (totalEntries === 0) {
     return (
       <Card className={className}>
         <CardHeader className="py-3 px-4 flex items-center justify-between">
@@ -268,7 +477,7 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
           <CardTitle className="text-lg">Time Entries</CardTitle>
         </div>
         <Badge variant="outline">
-          {timeEntries.length} entries • {totalHours.toFixed(1)} hours
+          {totalEntries} entries • {totalHours.toFixed(1)} hours
         </Badge>
       </CardHeader>
       <CardContent className="p-0">
@@ -339,24 +548,135 @@ export function TimeEntriesTable({ filters, className }: TimeEntriesTableProps) 
                     </TableCell>
                   </TableRow>
                 ))}
+                {isLoading && page > 1 && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-4">
+                      <div className="flex items-center justify-center space-x-2">
+                        <Skeleton className="h-4 w-4 rounded-full" />
+                        <span className="text-muted-foreground">Loading more entries...</span>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
         </div>
       </CardContent>
       <CardFooter className="py-3 px-4 justify-between border-t">
-        <div className="text-sm">
-          Total Hours: <span className="font-medium">{totalHours.toFixed(1)}</span>
+        <div className="flex items-center space-x-4">
+          <div className="text-sm">
+            Total Hours: <span className="font-medium">{totalHours.toFixed(1)}</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <span className="text-xs text-muted-foreground">Show:</span>
+            <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
+              <SelectTrigger className="h-7 w-16 text-xs">
+                <SelectValue placeholder={pageSize.toString()} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="5">5</SelectItem>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-        <div className="flex space-x-2">
-          <Button variant="outline" size="sm">
-            <FileText className="mr-2 h-4 w-4" />
-            Report
-          </Button>
-          <Button variant="outline" size="sm">
-            <Download className="mr-2 h-4 w-4" />
-            CSV
-          </Button>
+        <div className="flex items-center space-x-2">
+          <div className="flex gap-1">
+            <Button variant="outline" size="sm" onClick={handleGenerateReport}>
+              <FileText className="mr-1 h-4 w-4" />
+              Report
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleCsvExport}>
+              <Download className="mr-1 h-4 w-4" />
+              CSV
+            </Button>
+          </div>
+          {totalPages > 1 && (
+            <Pagination>
+              <PaginationContent>
+                <PaginationItem>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => handlePageChange(1)}
+                    disabled={page === 1}
+                  >
+                    <ChevronsLeft className="h-4 w-4" />
+                  </Button>
+                </PaginationItem>
+                <PaginationItem>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => handlePageChange(page - 1)}
+                    disabled={page === 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                </PaginationItem>
+                
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  // Calculate which page numbers to show
+                  let pageNum;
+                  if (totalPages <= 5) {
+                    // Show all pages if there are 5 or fewer
+                    pageNum = i + 1;
+                  } else if (page <= 3) {
+                    // Near the start
+                    pageNum = i + 1;
+                  } else if (page >= totalPages - 2) {
+                    // Near the end
+                    pageNum = totalPages - 4 + i;
+                  } else {
+                    // In the middle
+                    pageNum = page - 2 + i;
+                  }
+                  
+                  return (
+                    <PaginationItem key={i}>
+                      <Button
+                        variant={page === pageNum ? "default" : "outline"}
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => handlePageChange(pageNum)}
+                      >
+                        {pageNum}
+                      </Button>
+                    </PaginationItem>
+                  );
+                })}
+                
+                <PaginationItem>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => handlePageChange(page + 1)}
+                    disabled={page === totalPages}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </PaginationItem>
+                <PaginationItem>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => handlePageChange(totalPages)}
+                    disabled={page === totalPages}
+                  >
+                    <ChevronsRight className="h-4 w-4" />
+                  </Button>
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          )}
         </div>
       </CardFooter>
     </Card>
